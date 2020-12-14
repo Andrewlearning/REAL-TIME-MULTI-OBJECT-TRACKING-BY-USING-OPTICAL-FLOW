@@ -23,6 +23,9 @@ from deep_sort import preprocessing, nn_matching
 from deep_sort.detection import Detection
 from deep_sort.tracker import Tracker
 from tools import generate_detections as gdet
+from ground_truth import groundTruth
+from Rectangle import Rectangle
+optflow_params = [0.5, 3, 15, 3, 5, 1.2, 0]
 flags.DEFINE_string('framework', 'tf', '(tf, tflite, trt')
 flags.DEFINE_string('weights', './checkpoints/yolov4-416',
                     'path to weights file')
@@ -38,6 +41,8 @@ flags.DEFINE_boolean('dont_show', False, 'dont show video output')
 flags.DEFINE_boolean('info', False, 'show detailed info of tracked objects')
 flags.DEFINE_boolean('count', False, 'count objects being tracked on screen')
 
+flags.DEFINE_string("runmode", "test", "select the different running mode")
+flags.DEFINE_string("additional", None, "do background extract or not")
 def main(_argv):
     # Definition of the parameters
     max_cosine_distance = 0.4
@@ -91,8 +96,19 @@ def main(_argv):
         out = cv2.VideoWriter(FLAGS.output, codec, fps, (width, height))
 
     frame_num = 0
+    # The class list which contain all the bounding box information
+    rectangles = []
+    classes = None
+    num_objects = None
+    prev = None
+    timeRecorder = []
+    iou = []
+    fgbg = cv2.createBackgroundSubtractorKNN()
+
+
+
     # while video is running
-    while True:
+    while True and frame_num < 80:
         return_value, frame = vid.read()
         if return_value:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -108,59 +124,162 @@ def main(_argv):
         image_data = image_data[np.newaxis, ...].astype(np.float32)
         start_time = time.time()
 
-        # run detections on tflite if flag is set
-        if FLAGS.framework == 'tflite':
-            interpreter.set_tensor(input_details[0]['index'], image_data)
-            interpreter.invoke()
-            pred = [interpreter.get_tensor(output_details[i]['index']) for i in range(len(output_details))]
-            # run detections using yolov3 if flag is set
-            if FLAGS.model == 'yolov3' and FLAGS.tiny == True:
-                boxes, pred_conf = filter_boxes(pred[1], pred[0], score_threshold=0.25,
-                                                input_shape=tf.constant([input_size, input_size]))
+
+
+        if FLAGS.runmode == "normal":
+            # run detections on tflite if flag is set
+            if FLAGS.framework == 'tflite':
+                interpreter.set_tensor(input_details[0]['index'], image_data)
+                interpreter.invoke()
+                pred = [interpreter.get_tensor(output_details[i]['index']) for i in range(len(output_details))]
+                # run detections using yolov3 if flag is set
+                if FLAGS.model == 'yolov3' and FLAGS.tiny == True:
+                    boxes, pred_conf = filter_boxes(pred[1], pred[0], score_threshold=0.25,
+                                                    input_shape=tf.constant([input_size, input_size]))
+                else:
+                    boxes, pred_conf = filter_boxes(pred[0], pred[1], score_threshold=0.25,
+                                                    input_shape=tf.constant([input_size, input_size]))
             else:
-                boxes, pred_conf = filter_boxes(pred[0], pred[1], score_threshold=0.25,
-                                                input_shape=tf.constant([input_size, input_size]))
+                batch_data = tf.constant(image_data)
+                pred_bbox = infer(batch_data)
+                for key, value in pred_bbox.items():
+                    boxes = value[:, :, 0:4]
+                    pred_conf = value[:, :, 4:]
+
+            boxes, scores, classes, valid_detections = tf.image.combined_non_max_suppression(
+                boxes=tf.reshape(boxes, (tf.shape(boxes)[0], -1, 1, 4)),
+                scores=tf.reshape(
+                    pred_conf, (tf.shape(pred_conf)[0], -1, tf.shape(pred_conf)[-1])),
+                max_output_size_per_class=50,
+                max_total_size=50,
+                iou_threshold=FLAGS.iou,
+                score_threshold=FLAGS.score
+            )
+
+            # convert data to numpy arrays and slice out unused elements
+            num_objects = valid_detections.numpy()[0]
+            bboxes = boxes.numpy()[0]
+            bboxes = bboxes[0:int(num_objects)]
+            scores = scores.numpy()[0]
+            scores = scores[0:int(num_objects)]
+            classes = classes.numpy()[0]
+            classes = classes[0:int(num_objects)]
+
+            # format bounding boxes from normalized ymin, xmin, ymax, xmax ---> xmin, ymin, width, height
+            original_h, original_w, _ = frame.shape
+            bboxes = utils.format_boxes(bboxes, original_h, original_w)
+
+            # when YOLO doing the update, we need to clear all the previous bbox information
+            # and create the new bbox classes to contain the new coodinate data
+            rectangles = []
+            for box in bboxes:
+                rect = Rectangle(box[0], box[1], box[2], box[3])
+                rect.ready = True
+                rect.update_right_bottom()
+                rectangles.append(rect)
+
+
+        elif FLAGS.runmode == "optical":
+            if frame_num == 1 or frame_num % 10 == 0:
+                # run detections on tflite if flag is set
+                if FLAGS.framework == 'tflite':
+                    interpreter.set_tensor(input_details[0]['index'], image_data)
+                    interpreter.invoke()
+                    pred = [interpreter.get_tensor(output_details[i]['index']) for i in range(len(output_details))]
+                    # run detections using yolov3 if flag is set
+                    if FLAGS.model == 'yolov3' and FLAGS.tiny == True:
+                        boxes, pred_conf = filter_boxes(pred[1], pred[0], score_threshold=0.25,
+                                                        input_shape=tf.constant([input_size, input_size]))
+                    else:
+                        boxes, pred_conf = filter_boxes(pred[0], pred[1], score_threshold=0.25,
+                                                        input_shape=tf.constant([input_size, input_size]))
+                else:
+                    batch_data = tf.constant(image_data)
+                    pred_bbox = infer(batch_data)
+                    for key, value in pred_bbox.items():
+                        boxes = value[:, :, 0:4]
+                        pred_conf = value[:, :, 4:]
+
+                boxes, scores, classes, valid_detections = tf.image.combined_non_max_suppression(
+                    boxes=tf.reshape(boxes, (tf.shape(boxes)[0], -1, 1, 4)),
+                    scores=tf.reshape(
+                        pred_conf, (tf.shape(pred_conf)[0], -1, tf.shape(pred_conf)[-1])),
+                    max_output_size_per_class=50,
+                    max_total_size=50,
+                    iou_threshold=FLAGS.iou,
+                    score_threshold=FLAGS.score
+                )
+
+                # convert data to numpy arrays and slice out unused elements
+                num_objects = valid_detections.numpy()[0]
+                bboxes = boxes.numpy()[0]
+                bboxes = bboxes[0:int(num_objects)]
+                scores = scores.numpy()[0]
+                scores = scores[0:int(num_objects)]
+                classes = classes.numpy()[0]
+                classes = classes[0:int(num_objects)]
+
+
+                # format bounding boxes from normalized ymin, xmin, ymax, xmax ---> xmin, ymin, width, height
+                original_h, original_w, _ = frame.shape
+                bboxes = utils.format_boxes(bboxes, original_h, original_w)
+
+                # when YOLO doing the update, we need to clear all the previous bbox information
+                # and create the new bbox classes to contain the new coodinate data
+                rectangles = []
+                for box in bboxes:
+                    rect = Rectangle(box[0], box[1], box[2], box[3])
+                    rect.ready = True
+                    rect.update_right_bottom()
+                    rectangles.append(rect)
+
+            # do the optical flow in the rest of the time
+            else:
+                current = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+                # if we want to add backgroud subtration
+                if FLAGS.additional == "extract":
+                    current = fgbg.apply(current)
+
+                for box in rectangles:
+                    if box.is_ready():
+                        if box.features is None:
+                            box.find_features(current)
+                        else:
+                            box.update_features(prev, current)
+
+
+            # 更新prev的帧
+            if frame_num == 1 or frame_num % 10 == 0:
+                prev = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            else:
+                prev = current
         else:
-            batch_data = tf.constant(image_data)
-            pred_bbox = infer(batch_data)
-            for key, value in pred_bbox.items():
-                boxes = value[:, :, 0:4]
-                pred_conf = value[:, :, 4:]
+            print("=" * 10)
+            print("please select one kind of running mode")
+            return
 
-        boxes, scores, classes, valid_detections = tf.image.combined_non_max_suppression(
-            boxes=tf.reshape(boxes, (tf.shape(boxes)[0], -1, 1, 4)),
-            scores=tf.reshape(
-                pred_conf, (tf.shape(pred_conf)[0], -1, tf.shape(pred_conf)[-1])),
-            max_output_size_per_class=50,
-            max_total_size=50,
-            iou_threshold=FLAGS.iou,
-            score_threshold=FLAGS.score
-        )
 
-        # convert data to numpy arrays and slice out unused elements
-        num_objects = valid_detections.numpy()[0]
-        bboxes = boxes.numpy()[0]
-        bboxes = bboxes[0:int(num_objects)]
-        scores = scores.numpy()[0]
-        scores = scores[0:int(num_objects)]
-        classes = classes.numpy()[0]
-        classes = classes[0:int(num_objects)]
 
-        # format bounding boxes from normalized ymin, xmin, ymax, xmax ---> xmin, ymin, width, height
-        original_h, original_w, _ = frame.shape
-        bboxes = utils.format_boxes(bboxes, original_h, original_w)
+
+        # 得到bboxes
+        bboxes = [box.get_xywh() for box in rectangles]
+        if (frame_num-1) % 3 == 0:
+            detectionBboxes = bboxes
+        else:
+            detectionBboxes = []
+
 
         # store all predictions in one parameter for simplicity when calling functions
         pred_bbox = [bboxes, scores, classes, num_objects]
 
         # read in all class names from config
         class_names = utils.read_class_names(cfg.YOLO.CLASSES)
-
         # by default allow all classes in .names file
-        allowed_classes = list(class_names.values())
+        # allowed_classes = list(class_names.values())
         
         # custom allowed classes (uncomment line below to customize tracker for only people)
-        #allowed_classes = ['person']
+        allowed_classes = ['person']
 
         # loop through objects and use class index to get class name, allow only classes in allowed_classes list
         names = []
@@ -192,8 +311,8 @@ def main(_argv):
         # run non-maxima supression
         boxs = np.array([d.tlwh for d in detections])
         scores = np.array([d.confidence for d in detections])
-        classes = np.array([d.class_name for d in detections])
-        indices = preprocessing.non_max_suppression(boxs, classes, nms_max_overlap, scores)
+        classes_ = np.array([d.class_name for d in detections])
+        indices = preprocessing.non_max_suppression(boxs, classes_, nms_max_overlap, scores)
         detections = [detections[i] for i in indices]       
 
         # Call the tracker
@@ -211,19 +330,26 @@ def main(_argv):
             color = colors[int(track.track_id) % len(colors)]
             color = [i * 255 for i in color]
             cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), color, 2)
-            cv2.rectangle(frame, (int(bbox[0]), int(bbox[1]-30)), (int(bbox[0])+(len(class_name)+len(str(track.track_id)))*17, int(bbox[1])), color, -1)
-            cv2.putText(frame, class_name + "-" + str(track.track_id),(int(bbox[0]), int(bbox[1]-10)),0, 0.75, (255,255,255),2)
 
-        # if enable info flag then print details about each track
-            if FLAGS.info:
-                print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
 
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)
+        timeRecorder.append(fps)
         print("FPS: %.2f" % fps)
         result = np.asarray(frame)
         result = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        
+
+        # calculate the iou base on the detectional result
+        if (frame_num-1) % 3 == 0 and (frame_num-1) <= 27:
+            curGroundTruth = groundTruth[frame_num-1]
+            count = 0
+            for detectionBox in detectionBboxes:
+                for trueBox in curGroundTruth:
+                    if isMatch(detectionBox, trueBox):
+                        count += 1
+                        iou.append(calIou(detectionBox, trueBox))
+
+
         if not FLAGS.dont_show:
             cv2.imshow("Output Video", result)
         
@@ -231,7 +357,65 @@ def main(_argv):
         if FLAGS.output:
             out.write(result)
         if cv2.waitKey(1) & 0xFF == ord('q'): break
+
+    print("The average iou is %.2f" % (sum(iou) / len(iou) * 100), "%")
+    print("length iou", len(iou))
+    print("The average fps is %.2f" % (sum(timeRecorder)/len(timeRecorder)))
+    print("length fps", len(timeRecorder))
+
+    print("iou =",iou)
+    print("fps =",timeRecorder)
     cv2.destroyAllWindows()
+
+
+
+def isMatch(current, trueBox):
+    currentX = current[0]
+    currentY = current[1]
+    currentWidth = current[2]
+    currentHeight = current[3]
+
+    trueBoxMinX = trueBox[0]
+    trueBoxMinY = trueBox[1]
+    trueBoxMaxX = trueBox[2]
+    trueBoxMaxY = trueBox[3]
+    trueBoxWidth = abs(trueBoxMaxX - trueBoxMinX)
+    trueBoxHeight = abs(trueBoxMaxY - trueBoxMinY)
+
+    if (min(currentX + currentWidth, trueBoxMaxX)
+        - max(currentX, trueBoxMinX)) / trueBoxWidth >= 0.7 and \
+        (min(currentY + currentHeight, trueBoxMaxY)
+         - max(currentY, trueBoxMinY)) / trueBoxHeight >= 0.7:
+        return True
+    return False
+
+def calIou(curBox, trueBox):
+
+
+    curBoxX = curBox[0]
+    curBoxY = curBox[1]
+    curBoxWidth = curBox[2]
+    curBoxHeight = curBox[3]
+
+    trueBoxMinX = trueBox[0]
+    trueBoxMinY = trueBox[1]
+    trueBoxMaxX = trueBox[2]
+    trueBoxMaxY = trueBox[3]
+
+
+    intersectionArea = (min(curBoxX + curBoxWidth, trueBoxMaxX) - max(curBoxX, trueBoxMinX)) * \
+                       (min(curBoxY + curBoxHeight, trueBoxMaxY) - max(curBoxY, trueBoxMinY))
+
+    boxArea = curBoxHeight * curBoxWidth
+    curGroundTruthArea = (trueBoxMaxX - trueBoxMinX) * \
+                        (trueBoxMaxY - trueBoxMinY)
+
+    iou = intersectionArea / (curGroundTruthArea + boxArea - intersectionArea)
+
+    return iou
+
+
+
 
 if __name__ == '__main__':
     try:
