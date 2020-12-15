@@ -22,13 +22,13 @@ then
 
    /Library/Frameworks/Python.framework/Versions/3.6/bin/python3.6 object_tracker.py --video ./opticalFlowInput/yifuziyi.mp4 --runmode optical        --output ./outputs/tracker.avi --model yolov4 --dont_show --info
 
-elif [ "$1" == "bgextract" ]
+elif [ "$1" == "bgsubtract" ]
 then
    echo "now run with background extract mode"
    echo "========================="
 
 
-   /Library/Frameworks/Python.framework/Versions/3.6/bin/python3.6 object_tracker.py --video ./opticalFlowInput/yifuziyi.mp4 --runmode optical        --output ./outputs/tracker.avi --model yolov4 --dont_show --info --additional extract
+   /Library/Frameworks/Python.framework/Versions/3.6/bin/python3.6 object_tracker.py --video ./opticalFlowInput/yifuziyi.mp4 --runmode optical        --output ./outputs/tracker.avi --model yolov4 --dont_show --info --additional subtract
 
 else
   echo "invalue input, shall run error"

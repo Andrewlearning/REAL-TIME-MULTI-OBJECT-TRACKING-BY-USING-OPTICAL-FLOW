@@ -238,7 +238,7 @@ def main(_argv):
                 current = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
                 # if we want to add backgroud subtration
-                if FLAGS.additional == "extract":
+                if FLAGS.additional == "subtract":
                     current = fgbg.apply(current)
 
                 for box in rectangles:
@@ -249,7 +249,7 @@ def main(_argv):
                             box.update_features(prev, current)
 
 
-            # 更新prev的帧
+            # update previous frame
             if frame_num == 1 or frame_num % 10 == 0:
                 prev = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             else:
