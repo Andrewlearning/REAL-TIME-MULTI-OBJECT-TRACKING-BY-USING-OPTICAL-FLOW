@@ -5,8 +5,8 @@
 <br>
 
 # Announcement
-Most of the code for this project comes from: https://github.com/theAIGuysCode/yolov4-deepsort. 
-Only for personal learning, not for commercialization.
+Most of the code for this project comes from:   https://github.com/theAIGuysCode/yolov4-deepsort.   
+Only for personal learning, not for commercialization.  
 Please contact me if there is any infringement.
 <br>
 
@@ -27,7 +27,7 @@ Command line:
 
 Runing the algorithm: **YOLO + background subtraction + optical flow + DeepSORT**  
 Command line:
-> ./runDeepSort.sh bgextract
+> ./runDeepSort.sh bgsubtract
 <br>
 
 #Mainly addtion and change
