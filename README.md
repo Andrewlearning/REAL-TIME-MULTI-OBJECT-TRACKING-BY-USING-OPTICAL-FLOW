@@ -4,29 +4,35 @@
 **Github link:** https://github.com/Andrewlearning/yolov4-deepsort <br>
 <br>
 
-# Announcement
-Most of the code for this project comes from:   https://github.com/theAIGuysCode/yolov4-deepsort.   
-Only for personal learning, not for commercialization.  
-Please contact me if there is any infringement.
-<br>
 
-# Environment Config
+##Downloading Official YOLOv4 Pre-trained Weights
+If we want to use YOLOv4 without any training, we can just download the pre-training weight and put the pre-training file in the  'data' folder of this repository. The download link:
+https://drive.google.com/open?id=1cewMfusmPjYWbrnuJRuKhPMwRe_b9PaT
+
+## Environment Config
 Please refer the requirements.txt in the root path.
 <br>
 
+##Input and output
+The input video can place in /opticalFlowInput as .mp4 format.
+And need to change the input filename in runDeepSort.sh before run the program.
+
+After run the correct shell command. The output file will in /output and nameed as tracker.avi
+
+
 ##How to run the code
 Runing the algorithm:** YOLO + DeepSORT**  
-Command line:
+Run the command line in the file root path:
 > ./runDeepSort.sh normal
 <br>
 
 Runing the algorithm: **YOLO + optical flow + DeepSORT**
-Command line:  
+Run the command line in the file root path:
 > ./runDeepSort.sh optical
 <br>
 
 Runing the algorithm: **YOLO + background subtraction + optical flow + DeepSORT**  
-Command line:
+Run the command line in the file root path:
 > ./runDeepSort.sh bgsubtract
 <br>
 
